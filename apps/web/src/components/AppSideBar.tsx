@@ -383,11 +383,8 @@ export function NavUser({
 function VersionInfo() {
   const appVersion = env.NEXT_PUBLIC_APP_VERSION;
   const gitSha = env.NEXT_PUBLIC_GIT_SHA;
-
-  // If no version info available, don't render anything
-  if (!appVersion && !gitSha) {
-    return null;
-  }
+  const sourceUrl =
+    "https://github.com/vladbisceanu/useSend/tree/growthpath-mail";
 
   const displayVersion =
     appVersion && appVersion !== "unknown"
@@ -396,16 +393,22 @@ function VersionInfo() {
         ? gitSha.substring(0, 7)
         : null;
 
-  if (!displayVersion) {
-    return null;
-  }
-
   return (
     <div className="px-2 py-2 text-xs text-muted-foreground">
-      <div className="flex items-center justify-between">
-        <span>Version</span>
-        <span className="font-mono">{displayVersion}</span>
-      </div>
+      {displayVersion && (
+        <div className="flex items-center justify-between">
+          <span>Version</span>
+          <span className="font-mono">{displayVersion}</span>
+        </div>
+      )}
+      <a
+        className="mt-1 block underline underline-offset-2 hover:text-foreground"
+        href={sourceUrl}
+        rel="noreferrer"
+        target="_blank"
+      >
+        Source code (AGPLv3)
+      </a>
     </div>
   );
 }
