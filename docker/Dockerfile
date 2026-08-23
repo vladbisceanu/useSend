@@ -78,5 +78,6 @@ RUN ln -s /app/node_modules/prisma/build/index.js ./node_modules/.bin/prisma
 ENV SKIP_ENV_VALIDATION="false"
 
 COPY  ./docker/start.sh ./start.sh
+COPY  ./apps/web/scripts/bootstrap-self-hosted.mjs ./bootstrap-self-hosted.mjs
 
 CMD ["sh", "start.sh"]

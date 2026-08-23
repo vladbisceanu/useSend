@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => {
   };
 
   const baseCreateUser = vi.fn();
+  const baseGetUserByEmail = vi.fn();
+  const baseUpdateSession = vi.fn();
   const accountFindUnique = vi.fn();
   const userFindUnique = vi.fn();
   const userFindFirst = vi.fn();
@@ -17,6 +19,7 @@ const mocks = vi.hoisted(() => {
   const transactionInviteFindFirst = vi.fn();
   const transactionUserCreate = vi.fn();
   const executeRaw = vi.fn();
+  const sessionFindUnique = vi.fn();
   const transaction = vi.fn(async (callback) =>
     callback({
       $executeRaw: executeRaw,
@@ -33,6 +36,8 @@ const mocks = vi.hoisted(() => {
   return {
     env,
     baseCreateUser,
+    baseGetUserByEmail,
+    baseUpdateSession,
     accountFindUnique,
     userFindUnique,
     userFindFirst,
@@ -41,6 +46,7 @@ const mocks = vi.hoisted(() => {
     transactionInviteFindFirst,
     transactionUserCreate,
     executeRaw,
+    sessionFindUnique,
     transaction,
   };
 });
@@ -50,7 +56,11 @@ vi.mock("next-auth", () => ({
 }));
 
 vi.mock("@auth/prisma-adapter", () => ({
-  PrismaAdapter: vi.fn(() => ({ createUser: mocks.baseCreateUser })),
+  PrismaAdapter: vi.fn(() => ({
+    createUser: mocks.baseCreateUser,
+    getUserByEmail: mocks.baseGetUserByEmail,
+    updateSession: mocks.baseUpdateSession,
+  })),
 }));
 
 vi.mock("next-auth/providers/github", () => ({
@@ -76,6 +86,9 @@ vi.mock("~/server/db", () => ({
     },
     teamInvite: {
       findFirst: mocks.inviteFindFirst,
+    },
+    session: {
+      findUnique: mocks.sessionFindUnique,
     },
     $transaction: mocks.transaction,
   },
@@ -120,6 +133,8 @@ describe("authOptions", () => {
     mocks.transactionUserFindFirst.mockResolvedValue(null);
     mocks.transactionInviteFindFirst.mockResolvedValue(null);
     mocks.transactionUserCreate.mockResolvedValue({ ...newUser, id: 1 });
+    mocks.sessionFindUnique.mockResolvedValue(null);
+    mocks.baseGetUserByEmail.mockResolvedValue(null);
   });
 
   it("configures the GitHub provider with an explicit issuer", () => {
@@ -154,9 +169,13 @@ describe("authOptions", () => {
       mocks.userFindUnique.mockResolvedValue({ id: 1 });
 
       await expect(
-        canRegisterSelfHostedUser("existing@example.com"),
+        canRegisterSelfHostedUser(" Existing@Example.com "),
       ).resolves.toBe(true);
 
+      expect(mocks.userFindUnique).toHaveBeenCalledWith({
+        where: { email: "existing@example.com" },
+        select: { id: true },
+      });
       expect(mocks.userFindFirst).not.toHaveBeenCalled();
       expect(mocks.inviteFindFirst).not.toHaveBeenCalled();
     });
@@ -229,9 +248,12 @@ describe("authOptions", () => {
     it("keeps cloud user creation unchanged", async () => {
       mocks.baseCreateUser.mockResolvedValue({ ...newUser, id: 1 });
 
-      await createUser(newUser);
+      await createUser({ ...newUser, email: " New@Example.com " });
 
-      expect(mocks.baseCreateUser).toHaveBeenCalledWith(newUser);
+      expect(mocks.baseCreateUser).toHaveBeenCalledWith({
+        ...newUser,
+        email: "new@example.com",
+      });
       expect(mocks.transaction).not.toHaveBeenCalled();
     });
 
@@ -327,6 +349,78 @@ describe("authOptions", () => {
 
       expect(mocks.transaction).toHaveBeenCalledOnce();
       expect(mocks.transactionUserCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("adapter email lookup", () => {
+    const getUserByEmail = authOptions.adapter?.getUserByEmail;
+
+    if (!getUserByEmail) {
+      throw new Error("Expected the auth adapter to support email lookup");
+    }
+
+    it("normalizes OAuth email casing before the first account link", async () => {
+      await getUserByEmail(" Vlad@Bisceanu.com ");
+
+      expect(mocks.baseGetUserByEmail).toHaveBeenCalledWith(
+        "vlad@bisceanu.com",
+      );
+    });
+  });
+
+  describe("adapter session updates", () => {
+    const updateSession = authOptions.adapter?.updateSession;
+
+    if (!updateSession) {
+      throw new Error("Expected the auth adapter to support session updates");
+    }
+
+    it("does not extend a marked bootstrap session", async () => {
+      const originalExpires = new Date("2026-08-23T08:00:00.000Z");
+      const requestedExpires = new Date("2026-09-22T06:00:00.000Z");
+      const sessionToken = `usesend_bootstrap_${"a".repeat(64)}`;
+      mocks.sessionFindUnique.mockResolvedValue({ expires: originalExpires });
+      mocks.baseUpdateSession.mockResolvedValue({
+        sessionToken,
+        userId: 1,
+        expires: originalExpires,
+      });
+
+      await updateSession({ sessionToken, expires: requestedExpires });
+
+      expect(mocks.baseUpdateSession).toHaveBeenCalledWith({
+        sessionToken,
+        expires: originalExpires,
+      });
+    });
+
+    it("allows a marked bootstrap session to expire earlier", async () => {
+      const originalExpires = new Date("2026-08-23T08:00:00.000Z");
+      const requestedExpires = new Date("2026-08-23T07:00:00.000Z");
+      const sessionToken = `usesend_bootstrap_${"b".repeat(64)}`;
+      mocks.sessionFindUnique.mockResolvedValue({ expires: originalExpires });
+
+      await updateSession({ sessionToken, expires: requestedExpires });
+
+      expect(mocks.baseUpdateSession).toHaveBeenCalledWith({
+        sessionToken,
+        expires: requestedExpires,
+      });
+    });
+
+    it("keeps ordinary session refresh behavior unchanged", async () => {
+      const requestedExpires = new Date("2026-09-22T06:00:00.000Z");
+
+      await updateSession({
+        sessionToken: "ordinary-session-token",
+        expires: requestedExpires,
+      });
+
+      expect(mocks.baseUpdateSession).toHaveBeenCalledWith({
+        sessionToken: "ordinary-session-token",
+        expires: requestedExpires,
+      });
+      expect(mocks.sessionFindUnique).not.toHaveBeenCalled();
     });
   });
 });
