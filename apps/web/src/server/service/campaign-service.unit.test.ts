@@ -2,38 +2,41 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "crypto";
 import { UnsubscribeReason } from "@prisma/client";
 
-const { mockDb, mockTx, mockUpdateContactSubscription } = vi.hoisted(() => {
-  const mockTx = {
-    campaignEmail: {
-      findUnique: vi.fn(),
-      create: vi.fn(),
-    },
-    email: {
-      findFirst: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-    },
-    emailEvent: {
-      create: vi.fn(),
-    },
-  };
-
-  return {
-    mockTx,
-    mockDb: {
-      $transaction: vi.fn(async (callback: ReturnType<typeof vi.fn>) =>
-        callback(mockTx),
-      ),
-      contact: {
+const { mockDb, mockQueueAdd, mockTx, mockUpdateContactSubscription } =
+  vi.hoisted(() => {
+    const mockTx = {
+      campaignEmail: {
         findUnique: vi.fn(),
+        create: vi.fn(),
       },
-      campaign: {
+      email: {
+        findFirst: vi.fn(),
+        create: vi.fn(),
         update: vi.fn(),
       },
-    },
-    mockUpdateContactSubscription: vi.fn(),
-  };
-});
+      emailEvent: {
+        create: vi.fn(),
+      },
+    };
+
+    return {
+      mockTx,
+      mockDb: {
+        $transaction: vi.fn(async (callback: ReturnType<typeof vi.fn>) =>
+          callback(mockTx),
+        ),
+        contact: {
+          findUnique: vi.fn(),
+        },
+        campaign: {
+          findUnique: vi.fn(),
+          update: vi.fn(),
+        },
+      },
+      mockQueueAdd: vi.fn(),
+      mockUpdateContactSubscription: vi.fn(),
+    };
+  });
 
 vi.mock("~/server/db", () => ({
   db: mockDb,
@@ -55,7 +58,7 @@ vi.mock("~/server/service/contact-service", () => ({
 
 vi.mock("bullmq", () => ({
   Queue: class {
-    add = vi.fn();
+    add = mockQueueAdd;
   },
   Worker: class {},
 }));
@@ -92,6 +95,7 @@ vi.mock("~/server/logger/log", () => ({
 }));
 
 import {
+  CampaignBatchService,
   recordCampaignContactFailure,
   subscribeContact,
   unsubscribeContact,
@@ -118,6 +122,31 @@ const input = {
   },
   error: new Error("Queue for region ap-southeast-2 not found"),
 };
+
+describe("CampaignBatchService.queueBatch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses a BullMQ-compatible custom job ID", async () => {
+    mockDb.campaign.findUnique.mockResolvedValue({
+      lastSentAt: null,
+      batchWindowMinutes: 0,
+      status: "SCHEDULED",
+    });
+
+    await CampaignBatchService.queueBatch({
+      campaignId: "campaign_1",
+      teamId: 7,
+    });
+
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "campaign-campaign_1",
+      { campaignId: "campaign_1", teamId: 7 },
+      expect.objectContaining({ jobId: "campaign-batch-campaign_1" }),
+    );
+  });
+});
 
 describe("recordCampaignContactFailure", () => {
   beforeEach(() => {
