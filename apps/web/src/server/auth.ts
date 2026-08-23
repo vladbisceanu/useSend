@@ -16,6 +16,12 @@ import { env } from "~/env";
 import { db } from "~/server/db";
 
 const GITHUB_OAUTH_ISSUER = "https://github.com/login/oauth";
+const BOOTSTRAP_SESSION_TOKEN_PATTERN =
+  /^usesend_bootstrap_[0-9a-f]{64}$/;
+
+function normalizeEmail(email?: string | null) {
+  return email?.trim().toLowerCase() || undefined;
+}
 
 /**
  * PostgreSQL advisory-lock namespace for self-hosted user creation.
@@ -59,9 +65,11 @@ export async function canRegisterSelfHostedUser(
     }
   }
 
-  if (email) {
+  const normalizedEmail = normalizeEmail(email);
+
+  if (normalizedEmail) {
     const existingUser = await db.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
       select: { id: true },
     });
 
@@ -79,12 +87,12 @@ export async function canRegisterSelfHostedUser(
     return true;
   }
 
-  if (!email) {
+  if (!normalizedEmail) {
     return false;
   }
 
   const invite = await db.teamInvite.findFirst({
-    where: { email },
+    where: { email: normalizedEmail },
     select: { id: true },
   });
 
@@ -189,7 +197,7 @@ export const authOptions: NextAuthOptions = {
         ...session.user,
         id: user.id,
         isBetaUser: user.isBetaUser,
-        isAdmin: user.email === env.ADMIN_EMAIL,
+        isAdmin: normalizeEmail(user.email) === normalizeEmail(env.ADMIN_EMAIL),
         isWaitlisted: user.isWaitlisted,
       },
     }),
@@ -199,13 +207,51 @@ export const authOptions: NextAuthOptions = {
 
     return {
       ...prismaAdapter,
+      async getUserByEmail(email) {
+        if (!prismaAdapter.getUserByEmail) {
+          throw new Error("Prisma adapter does not support email lookup");
+        }
+
+        return prismaAdapter.getUserByEmail(normalizeEmail(email) ?? email);
+      },
+      async updateSession(session) {
+        if (!prismaAdapter.updateSession) {
+          throw new Error("Prisma adapter does not support session updates");
+        }
+
+        if (!BOOTSTRAP_SESSION_TOKEN_PATTERN.test(session.sessionToken)) {
+          return prismaAdapter.updateSession(session);
+        }
+
+        const existingSession = await db.session.findUnique({
+          where: { sessionToken: session.sessionToken },
+          select: { expires: true },
+        });
+
+        if (!existingSession) {
+          return null;
+        }
+
+        const requestedExpires = session.expires;
+        const expires =
+          requestedExpires && requestedExpires < existingSession.expires
+            ? requestedExpires
+            : existingSession.expires;
+
+        return prismaAdapter.updateSession({ ...session, expires });
+      },
       async createUser(user: AdapterUser) {
+        const normalizedUser = {
+          ...user,
+          email: normalizeEmail(user.email) ?? user.email,
+        };
+
         if (env.NEXT_PUBLIC_IS_CLOUD) {
           if (!prismaAdapter.createUser) {
             throw new Error("Prisma adapter does not support user creation");
           }
 
-          return prismaAdapter.createUser(user);
+          return prismaAdapter.createUser(normalizedUser);
         }
 
         return db.$transaction(async (tx) => {
@@ -219,12 +265,12 @@ export const authOptions: NextAuthOptions = {
           });
 
           if (registeredUser) {
-            if (!user.email) {
+            if (!normalizedUser.email) {
               throw new SelfHostedRegistrationError();
             }
 
             const invite = await tx.teamInvite.findFirst({
-              where: { email: user.email },
+              where: { email: normalizedUser.email },
               select: { id: true },
             });
 
@@ -236,7 +282,7 @@ export const authOptions: NextAuthOptions = {
           return tx.user.create({
             data: {
               name: user.name,
-              email: user.email,
+              email: normalizedUser.email,
               emailVerified: user.emailVerified,
               image: user.image,
             },
@@ -251,10 +297,11 @@ export const authOptions: NextAuthOptions = {
   events: {
     createUser: async ({ user }) => {
       let invitesAvailable = false;
+      const normalizedEmail = normalizeEmail(user.email);
 
-      if (user.email) {
+      if (normalizedEmail) {
         const invites = await db.teamInvite.findMany({
-          where: { email: user.email },
+          where: { email: normalizedEmail },
         });
 
         invitesAvailable = invites.length > 0;
