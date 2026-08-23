@@ -1,6 +1,14 @@
-import { PrismaClient } from "@prisma/client";
 import { randomBytes, scryptSync } from "node:crypto";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+
+const prismaRequire = createRequire(
+  existsSync("/app/apps/web/server.js")
+    ? "/app/apps/web/server.js"
+    : import.meta.url,
+);
+const { PrismaClient } = prismaRequire("@prisma/client");
 
 export const SELF_HOSTED_REGISTRATION_LOCK_ID = 1431520590;
 export const DEFAULT_API_KEY_NAME = "GrowthPath automation";
