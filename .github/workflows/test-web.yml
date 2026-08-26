@@ -1,17 +1,21 @@
-name: Web Tests
+name: Production Gate
 
 on:
   pull_request:
-    paths:
-      - "apps/web/**"
+    branches:
+      - growthpath-mail
   push:
     branches:
-      - main
-    paths:
-      - "apps/web/**"
+      - growthpath-mail
+  workflow_dispatch:
+
+concurrency:
+  group: production-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  web-tests:
+  production-gate:
+    name: Production gate
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -87,3 +91,6 @@ jobs:
 
       - name: Run integration tests
         run: pnpm --filter=web test:integration
+
+      - name: Build production image
+        run: docker build --file docker/Dockerfile --tag usesend:${{ github.sha }} .
