@@ -37,6 +37,7 @@ yarn-error.log*
 
 # Misc
 .DS_Store
+.claude/settings.local.json
 *.pem
 prod_db.tar
 
